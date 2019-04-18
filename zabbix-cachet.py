@@ -11,6 +11,8 @@ import time
 import threading
 import logging
 import yaml
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from pyzabbix import ZabbixAPI, ZabbixAPIException
 from operator import itemgetter
 
