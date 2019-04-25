@@ -8,6 +8,8 @@ import datetime
 import json
 import requests
 import time
+import locale
+locale.setlocale(locale.LC_ALL,'fr_FR.UTF-8') #fr datetime
 import threading
 import logging
 import yaml
@@ -18,7 +20,7 @@ from operator import itemgetter
 
 __author__ = 'Artem Alexandrov <qk4l()tem4uk.ru>'
 __license__ = """The MIT License (MIT)"""
-__version__ = '1.3.6'
+__version__ = '1.3.4'
 
 
 def client_http_error(url, code, message):
@@ -324,11 +326,6 @@ class Cachet:
         # Get values for new component
         params = {'name': name, 'link': '', 'description': '', 'status': '1', 'group_id': 0}
         params.update(kwargs)
-        # Do not post empty params to Cachet
-        for i in ('link', 'description'):
-            # Strip params to avoid empty (' ') values #24
-            if str(params[i]).strip() == '':
-                params.pop(i)
         # Check if components with same name already exists in same group
         component = self.get_components(name)
         # There are more that one component with same name already
@@ -507,7 +504,7 @@ def triggers_watcher(service_map):
                     last_inc = cachet.get_incident(i['component_id'])
                     if str(last_inc['id']) != '0':
                         if resolving_tmpl:
-                            inc_msg = resolving_tmpl.format(time=datetime.datetime.now().strftime('%b %d, %H:%M'),
+                            inc_msg = resolving_tmpl.format(time=datetime.datetime.now().strftime('%d %B, %H:%M'),
                                                             ) + cachet.get_incident(i['component_id'])['message']
                         else:
                             inc_msg = cachet.get_incident(i['component_id'])['message']
@@ -524,17 +521,12 @@ def triggers_watcher(service_map):
             elif trigger['value'] == '1':
                 zbx_event = zapi.get_event(i['triggerid'])
                 inc_name = trigger['description']
-                if not zbx_event:
-                    logging.warn('Failed to get zabbix event for trigger {}'.format(i['triggerid']))
-                    # Mock zbx_event for further usage
-                    zbx_event = {'acknowledged': '0',
-                                 }
-                if zbx_event.get('acknowledged', '0') == '1':
+                if zbx_event['acknowledged'] == '1':
                     inc_status = 2
                     for msg in zbx_event['acknowledges']:
                         # TODO: Add timezone?
                         #       Move format to config file
-                        ack_time = datetime.datetime.fromtimestamp(int(msg['clock'])).strftime('%b %d, %H:%M')
+                        ack_time = datetime.datetime.fromtimestamp(int(msg['clock'])).strftime('%d %B, %H:%M')
                         ack_msg = acknowledgement_tmpl.format(
                             message=msg['message'],
                             ack_time=ack_time,
@@ -552,26 +544,21 @@ def triggers_watcher(service_map):
                     comp_status = 2
 
                 if not inc_msg and investigating_tmpl:
-                    if zbx_event:
-                        zbx_event_clock = int(zbx_event.get('clock'))
-                        zbx_event_time = datetime.datetime.fromtimestamp(zbx_event_clock).strftime('%b %d, %H:%M')
-                    else:
-                        zbx_event_time = ''
                     inc_msg = investigating_tmpl.format(
-                        group=i.get('group_name', ''),
-                        component=i.get('component_name', ''),
-                        time=zbx_event_time,
-                        trigger_description=trigger.get('comments', ''),
-                        trigger_name=trigger.get('description', ''),
+                        group=i['group_name'],
+                        component=i['component_name'],
+                        time=datetime.datetime.fromtimestamp(int(zbx_event['clock'])).strftime('%d %B, %H:%M'),
+                        trigger_description=trigger['comments'],
+                        trigger_name=trigger['description'],
                     )
 
-                if not inc_msg and trigger.get('comments'):
-                    inc_msg = trigger.get('comments')
+                if not inc_msg and trigger['comments']:
+                    inc_msg = trigger['comments']
                 elif not inc_msg:
-                    inc_msg = trigger.get('description')
+                    inc_msg = trigger['description']
 
                 if 'group_name' in i:
-                    inc_name = i.get('group_name') + ' | ' + inc_name
+                    inc_name = i['group_name'] + ' | ' + inc_name
 
                 last_inc = cachet.get_incident(i['component_id'])
                 # Incident not registered
@@ -596,24 +583,20 @@ def triggers_watcher(service_map):
     return True
 
 
-def triggers_watcher_worker(service_map, interval, event):
+def triggers_watcher_worker(service_map, interval, e):
     """
     Worker for triggers_watcher. Run it continuously with specific interval
     @param service_map: list of tuples
     @param interval: interval in seconds
-    @param event: treading.Event object
+    @param e: treading.Event object
     @return:
     """
     logging.info('start trigger watcher')
-    while not event.is_set():
+    while not e.is_set():
         logging.debug('check Zabbix triggers')
         # Do not run if Zabbix is not available
         if zapi.get_version():
-            try:
-                triggers_watcher(service_map)
-            except Exception as e:
-                logging.error('triggers_watcher() raised an Exception. Something gone wrong')
-                logging.error(e, exc_info=True)
+            triggers_watcher(service_map)
         else:
             logging.error('Zabbix is not available. Skip checking...')
         time.sleep(interval)
@@ -683,7 +666,7 @@ def read_config(config_f):
     """
     try:
         return yaml.safe_load(open(config_f, "r"))
-    except (yaml.error.MarkedYAMLError, IOError) as e:
+    except (yaml.scanner.ScannerError, IOError) as e:
         logging.error('Failed to parse config file {}: {}'.format(config_f, e))
     return None
 
